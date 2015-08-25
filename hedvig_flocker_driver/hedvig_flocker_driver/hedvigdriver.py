@@ -72,8 +72,7 @@ class HedvigBlockDeviceAPI(object):
         """
         Return current node's hostname
         """
-        #return unicode(socket.gethostbyname(socket.getfqdn()))
-        return unicode('10.8.4.10')
+        return unicode(socket.gethostbyname(socket.getfqdn()))
 
     def create_volume(self, dataset_id, size):
         """
