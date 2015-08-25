@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<hedvig>
+    <logging>
+        <level>debug</level>
+        <directory>/var/log/hedvig/logs</directory>
+        <rotation_size_in_mb>1000</rotation_size_in_mb>
+        <number_of_log_files>5</number_of_log_files>
+    </logging>
+    <pages>
+        <port>15000</port>
+        <seed>wood1.hedviginc.com</seed>
+    </pages>
+    <hblock>
+        <port>8000</port>
+    </hblock>
+    <hcontroller>
+        <port>50000</port>
+    </hcontroller>
+    <bucket_properties>
+        <bucket_size_in_gb>5</bucket_size_in_gb>
+        <replication>3</replication>
+    </bucket_properties>
+    <cinder>
+        <dedup_enable>false</dedup_enable>
+        <compress_enable>false</compress_enable>
+        <cache_enable>false</cache_enable>
+        <replication_factor>3</replication_factor>
+        <replication_policy>agnostic</replication_policy>
+        <disk_residence>hdd</disk_residence>
+    </cinder>
+    <s3>
+        <workers>4</workers>
+        <clients>16</clients>
+        <port>16000</port>
+        <certfile>/var/log/hedvig/hedvigs3.crt</certfile>
+        <keyfile>/var/log/hedvig/hedvigs3.key</keyfile>
+        <https>false</https>
+    </s3>
+</hedvig>

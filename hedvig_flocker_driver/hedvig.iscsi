@@ -1,0 +1,58 @@
+#!/bin/bash
+
+
+COMMAND=$1
+TGT=$2
+IFS=$'\n';
+
+: ${TGT:="tgtvm1.hedviginc.com"}
+
+iscsi_discover() {
+RET=`iscsiadm -m discovery -t sendtargets -p ${TGT}`
+# PORTAL=`echo $RET | awk '{print($1)}'`
+# IQN=`echo $RET | awk '{print($2)}'`
+}
+
+iscsi_login() {
+for r in $RET
+do
+	PORTAL=`echo $r | awk '{print($1)}'`
+	IQN=`echo $r | awk '{print($2)}'`
+	iscsiadm --mode node --targetname ${IQN} --portal ${PORTAL} --login
+done
+}
+
+iscsi_logout() {
+for r in $RET
+do
+	PORTAL=`echo $r | awk '{print($1)}'`
+	IQN=`echo $r | awk '{print($2)}'`
+	iscsiadm --mode node --targetname ${IQN} --portal ${PORTAL} --logout
+done
+}
+
+iscsi_rescan() {
+for r in $RET
+do
+	PORTAL=`echo $r | awk '{print($1)}'`
+	IQN=`echo $r | awk '{print($2)}'`
+	iscsiadm --mode session --rescan
+done
+}
+
+case $COMMAND in
+	login)
+		iscsi_discover
+		iscsi_login
+	;;
+	logout)
+		iscsi_discover
+		iscsi_logout
+	;;
+	rescan)
+		iscsi_discover
+		iscsi_rescan
+	;;
+esac
+
+
