@@ -145,7 +145,6 @@ class HedvigBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume`` with a ``host`` attribute set to
             ``host``.
         """
-        self.logger_.error("**** attach_volume called ****")
         volName = str(blockdevice_id)
         vdiskInfo = findVDisk(volName)
         if (vdiskInfo == None):
@@ -164,11 +163,8 @@ class HedvigBlockDeviceAPI(object):
 		        raise AlreadyAttachedVolume(blockdevice_id)
         try:
                 hedvigAddAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn(computeHost)), self.logger_)
-                self.logger_.error("**** addAccess-1 done ****")
                 hedvigAddAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn()), self.logger_)
-                self.logger_.error("**** addAccess-2 done ****")
                 targetName, portal = hedvigDoIscsiDiscovery(tgtHost, lunnum, self.logger_)
-                self.logger_.error("**** iscsiDiscovery done ****")
         except Exception as e:
             	self.logger_.exception("volume assignment to connector failed :volume:%s:connector:%s", volName, attach_to)
                 return None
@@ -191,7 +187,6 @@ class HedvigBlockDeviceAPI(object):
             not attached to anything.
         :returns: ``None``
         """
-        self.logger_.error("**** detach_volume called ****")
         volName = str(blockdevice_id)
         vdiskInfo = findVDisk(volName)
         if (vdiskInfo == None):
@@ -209,15 +204,11 @@ class HedvigBlockDeviceAPI(object):
             raise UnattachedVolume(blockdevice_id)
         devicepath = self.get_device_path(blockdevice_id)
         try:
-            self.logger_.error("**** trying logout ****")
             self.logout(blockdevice_id)
-            self.logger_.error("**** logout done ****")
             hedvigRemoveAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn(computeHost)), devicepath.path,
                     self.logger_)
-            self.logger_.error("**** removeAccess-1 done ****")
             hedvigRemoveAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn()), devicepath.path,
                     self.logger_)
-            self.logger_.error("**** removeAccess-2 done ****")
         except Exception as e:
             print e
             raise Exception("Not able to detach volume with blockdevice_id: %s" % blockdevice_id)
@@ -225,22 +216,18 @@ class HedvigBlockDeviceAPI(object):
     def logout(self, blockdevice_id):
         """
         """
-        self.logger_.error("**** inside logout ****")
         volName = str(blockdevice_id)
         if (findVDisk(volName) == None):
             raise UnknownVolume(blockdevice_id)
         tgtHost = hedvigLookupTgt('wood', self.logger_)
         lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
         try:
-            self.logger_.error("**** inside logout: iscsiDiscovery ****")
             targetName, portal = hedvigDoIscsiDiscovery(tgtHost, lunnum, self.logger_)
         except Exception as e:
             targetName = None
         if (targetName == None):
             raise UnattachedVolume(blockdevice_id)
-        self.logger_.error("**** inside logout: hedvigIscsiLogout ****")
         hedvigDoIscsiLogout(targetName, portal, self.logger_)
-        self.logger_.error("**** inside logout: hedvigIscsiLogout done ****")
 
     def _is_attached(self, tgtHost, lunnum):
         attached_to = None
