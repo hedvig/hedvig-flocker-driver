@@ -13,8 +13,8 @@ from thrift.transport import TTransport
 from thrift.transport import TSocket
 from thrift.transport import THttpClient
 from thrift.protocol import TBinaryProtocol
-from qbcommon.ttypes import *
-from qbpages.ttypes import *
+from hedvig.common.qbcommon.ttypes import *
+from hedvig.common.qbpages.ttypes import *
 from hedvig.common.HedvigLogger import HedvigLogger
 HedvigLogger.setDefaultLogFile("flocker-driver.log")
 from hedvig.common.HedvigConfig import HedvigConfig
@@ -25,11 +25,12 @@ from subprocess import call
 import subprocess
 import os
 from twisted.python.filepath import FilePath
+from twisted.python.constants import Values, ValueConstant
 import pdb
 
 
 from flocker.node.agents.blockdevice import (
-    AlreadyAttachedVolume, IBlockDeviceAPI,
+    AlreadyAttachedVolume, IBlockDeviceAPI, IProfiledBlockDeviceAPI,
     BlockDeviceVolume, UnknownVolume, UnattachedVolume
 )
 
@@ -38,7 +39,21 @@ def GetHedvigStorageApi(username, password):
     return HedvigBlockDeviceAPI(username, password)
 
 
+ 
+class VolumeProfiles(Values):
+    """
+    :ivar GOLD: The profile for fast storage.
+    :ivar SILVER: The profile for intermediate/default storage.
+    :ivar BRONZE: The profile for cheap storage.
+    :ivar DEFAULT: The default profile if none is specified.
+    """
+    GOLD = 'gold'
+    SILVER = 'silver'
+    BRONZE = 'bronze'
+    DEFAULT = GOLD
+
 @implementer(IBlockDeviceAPI)
+@implementer(IProfiledBlockDeviceAPI)
 class HedvigBlockDeviceAPI(object):
 
     defaultVolumeBlkSize_ = 4096
@@ -74,6 +89,83 @@ class HedvigBlockDeviceAPI(object):
         """
         return unicode(socket.gethostbyname(socket.getfqdn()))
 
+    def _create_hedvig_volume_specs(self, dataset_id, size, profile_name):
+        """
+        Create specs for new volume.
+        :param UUID dataset_id: The Flocker dataset ID of the dataset on this
+            volume.
+        :param int size: The size of the new volume in bytes.
+        :profile_name: GOLD/SILVER/BRONZE
+        :returns: A ``BlockDeviceVolume``.
+        """
+
+        name = str(dataset_id)
+        description = str(dataset_id) + '_' + profile_name
+        volumeType = ''
+        vDiskInfo = VDiskInfo()
+        vDiskInfo.vDiskName = name
+        vDiskInfo.blockSize = HedvigBlockDeviceAPI.defaultVolumeBlkSize_
+        vDiskInfo.size = size
+        vDiskInfo.createdBy = HedvigBlockDeviceAPI.defaultCreatedBy_
+        vDiskInfo.description = description
+        vDiskInfo.replicationFactor = 3
+        vDiskInfo.exportedBlockSize = HedvigBlockDeviceAPI.defaultExportedBlkSize_
+        vDiskInfo.diskType = DiskType.BLOCK
+
+        if (profile_name.lower() == VolumeProfiles.GOLD):
+                vDiskInfo.cached = 'true'
+                vDiskInfo.dedup = 'false'
+                vDiskInfo.compressed = 'false'
+                vDiskInfo.residence = 0
+        elif (profile_name.lower() == VolumeProfiles.SILVER):
+                vDiskInfo.cached = 'true'
+                vDiskInfo.dedup = 'true'
+                vDiskInfo.compressed = 'true'
+                vDiskInfo.residence = 1
+        elif (profile_name.lower() == VolumeProfiles.BRONZE):
+                vDiskInfo.cached = 'false'
+                vDiskInfo.dedup = 'true'
+                vDiskInfo.compressed = 'true'
+                vDiskInfo.residence = 1
+        elif (profile_name.lower() == VolumeProfiles.DEFAULT):
+                vDiskInfo.cached = 'false'
+                vDiskInfo.dedup = 'true'
+                vDiskInfo.compressed = 'true'
+                vDiskInfo.residence = 1
+        else:
+            self.logger_.exception("Invalid profile:%s", profile_name)
+        return vDiskInfo;
+
+    def _create_hedvig_volume_with_profile(self, vDiskInfo, dataset_id):
+        """
+        """
+        try:
+            hedvigCreateVirtualDisk(vDiskInfo, self.logger_)
+        except Exception as e:
+            self.logger_.exception("error creating volume:name:%s", vDiskInfo.vDiskName)
+            raise e
+
+    	return BlockDeviceVolume(
+			    blockdevice_id=unicode(dataset_id),
+			    size=vDiskInfo.size,
+			    attached_to=None,
+			    dataset_id=dataset_id)
+
+    def create_volume_with_profile(self, dataset_id, size, profile_name):
+        """
+        Create a new volume.
+        :param UUID dataset_id: The Flocker dataset ID of the dataset on this
+            volume.
+        :param int size: The size of the new volume in bytes.
+        :param string profile_name: One of three options (GOLD, SILVER, BRONZE)
+        :returns: A ``BlockDeviceVolume``.
+        """
+
+        """ Driver entry point for creating a new volume """
+        self.logger_.debug("create_volume: name:%s:size:%s", dataset_id, size)
+        vDiskInfo = self._create_hedvig_volume_specs(dataset_id, size, profile_name);
+        return self._create_hedvig_volume_with_profile(vDiskInfo, dataset_id)
+
     def create_volume(self, dataset_id, size):
         """
         Create a new volume.
@@ -82,33 +174,10 @@ class HedvigBlockDeviceAPI(object):
         :param int size: The size of the new volume in bytes.
         :returns: A ``BlockDeviceVolume``.
         """
-        """Driver entry point for creating a new volume."""
-        name = str(dataset_id)
-        description = str(dataset_id)
-        volumeType = ''
-        try:
-            self.logger_.debug("create_volume: name:%s:description:%s:size:%s", name, description, size)
-            vDiskInfo = VDiskInfo()
-            vDiskInfo.vDiskName = name
-            vDiskInfo.blockSize = HedvigBlockDeviceAPI.defaultVolumeBlkSize_
-            vDiskInfo.size = size
-            vDiskInfo.createdBy = HedvigBlockDeviceAPI.defaultCreatedBy_
-            vDiskInfo.description = description
-            vDiskInfo.replicationFactor = 3
-            vDiskInfo.exportedBlockSize = HedvigBlockDeviceAPI.defaultExportedBlkSize_
-            vDiskInfo.diskType = DiskType.BLOCK
-            vDiskInfo.dedup = 'false'
-            vDiskInfo.compressed = 'false'
-            hedvigCreateVirtualDisk(vDiskInfo, self.logger_)
-        except Exception as e:
-            self.logger_.exception("error creating volume:name:%s:description:%s:size:%s", name, description, size)
-            self.logger_.debug("error creating volume:name:%s:description:%s:size:%s", name, description, size)
-
-    	return BlockDeviceVolume(
-			    blockdevice_id=unicode(dataset_id),
-			    size=size,
-			    attached_to=None,
-			    dataset_id=dataset_id)
+        """ Driver entry point for creating a new volume Use DEFAULT profile """
+        self.logger_.debug("create_volume: name:%s:size:%s", dataset_id, size)
+        vDiskInfo = self._create_hedvig_volume_specs(dataset_id, size, VolumeProfiles.DEFAULT);
+        return self._create_hedvig_volume_with_profile(vDiskInfo, dataset_id)
 
     def destroy_volume(self, blockdevice_id):
         """
