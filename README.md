@@ -1,4 +1,7 @@
-# Hedvig Flocker Driver – ![Driver Status] (https://travis-ci.org/travis-ci/travis-web.svg)
+# Hedvig Flocker Driver – [![alt text][2]][1]
+
+  [1]: https://github.com/hedvig/hedvig-flocker-driver/tree/master/hedvig_flocker_driver/hedvig_flocker_driver
+  [2]: https://travis-ci.org/travis-ci/travis-web.svg (Hedvig driver)
 Flocker storage driver for the [Hedvig Distributed Storage Platform] (http://www.hedviginc.com/product)
 
 ![Hedvig Flocker Integration]
