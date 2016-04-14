@@ -9,18 +9,14 @@ from zope.interface import implementer, Interface
 import socket
 from urlparse import urlparse
 
-from thrift.transport import TTransport
-from thrift.transport import TSocket
-from thrift.transport import THttpClient
-from thrift.protocol import TBinaryProtocol
-from hedvig.common.qbcommon.ttypes import *
-from hedvig.common.qbpages.ttypes import *
-from hedvig.common.HedvigLogger import HedvigLogger
+import common.hedvigpyc
+from common.HedvigCommon import *
+from common.HedvigLogger import HedvigLogger
 HedvigLogger.setDefaultLogFile("flocker-driver.log")
-from hedvig.common.HedvigConfig import HedvigConfig
-from hedvig.common.PagesProxy import PagesProxy
-from hedvig.common.HedvigControllerProxy import HedvigControllerProxy
-from hedvig.common.HedvigUtility import *
+from common.HedvigConfig import HedvigConfig
+#from hedvig.common.HedvigConfig import HedvigConfig
+#from hedvig.common.HedvigControllerProxy import HedvigControllerProxy
+#from hedvig.common.HedvigUtility import *
 from subprocess import call
 import subprocess
 import os
@@ -38,8 +34,6 @@ from flocker.node.agents.blockdevice import (
 def GetHedvigStorageApi(username, password):
     return HedvigBlockDeviceAPI(username, password)
 
-
- 
 class VolumeProfiles(Values):
     """
     :ivar GOLD: The profile for fast storage.
@@ -68,6 +62,7 @@ class HedvigBlockDeviceAPI(object):
         self._username = username
         self._password = password
         self._instance_id = self.compute_instance_id()
+        HedvigOpCb.hedvigpycInit(HedvigConfig.getInstance().getPagesHost(), 8)
 
     def allocation_unit(self):
         """
@@ -102,7 +97,7 @@ class HedvigBlockDeviceAPI(object):
         name = str(dataset_id)
         description = str(dataset_id) + '_' + profile_name
         volumeType = ''
-        vDiskInfo = VDiskInfo()
+        vDiskInfo = hc.VDiskInfo()
         vDiskInfo.vDiskName = name
         vDiskInfo.blockSize = HedvigBlockDeviceAPI.defaultVolumeBlkSize_
         vDiskInfo.size = size
@@ -110,7 +105,7 @@ class HedvigBlockDeviceAPI(object):
         vDiskInfo.description = description
         vDiskInfo.replicationFactor = 3
         vDiskInfo.exportedBlockSize = HedvigBlockDeviceAPI.defaultExportedBlkSize_
-        vDiskInfo.diskType = DiskType.BLOCK
+        vDiskInfo.diskType = hc.DiskType.BLOCK
 
         if (profile_name.lower() == VolumeProfiles.GOLD):
                 vDiskInfo.cached = 'true'
@@ -134,13 +129,14 @@ class HedvigBlockDeviceAPI(object):
                 vDiskInfo.residence = 1
         else:
             self.logger_.exception("Invalid profile:%s", profile_name)
+        vDiskInfo.dedup = False
         return vDiskInfo;
 
     def _create_hedvig_volume_with_profile(self, vDiskInfo, dataset_id):
         """
         """
         try:
-            hedvigCreateVirtualDisk(vDiskInfo, self.logger_)
+            hedvigCreateVirtualDiskWithInfo(vDiskInfo, self.logger_)
         except Exception as e:
             self.logger_.exception("error creating volume:name:%s", vDiskInfo.vDiskName)
             raise e
@@ -162,8 +158,9 @@ class HedvigBlockDeviceAPI(object):
         """
 
         """ Driver entry point for creating a new volume """
-        self.logger_.debug("create_volume: name:%s:size:%s", dataset_id, size)
+        self.logger_.info("create_volume: name:%s:size:%s", dataset_id, size)
         vDiskInfo = self._create_hedvig_volume_specs(dataset_id, size, profile_name);
+        vDiskInfo.dedup = 'false'
         return self._create_hedvig_volume_with_profile(vDiskInfo, dataset_id)
 
     def create_volume(self, dataset_id, size):
@@ -175,7 +172,7 @@ class HedvigBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume``.
         """
         """ Driver entry point for creating a new volume Use DEFAULT profile """
-        self.logger_.debug("create_volume: name:%s:size:%s", dataset_id, size)
+        self.logger_.info("create_volume: name:%s:size:%s", dataset_id, size)
         vDiskInfo = self._create_hedvig_volume_specs(dataset_id, size, VolumeProfiles.DEFAULT);
         return self._create_hedvig_volume_with_profile(vDiskInfo, dataset_id)
 
@@ -191,10 +188,16 @@ class HedvigBlockDeviceAPI(object):
 
         :return: ``None``
         """
-        if (findVDisk(str(blockdevice_id)) == None):
+        volName = str(blockdevice_id)
+        vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
+        if (vDiskInfo == None):
 	    	raise UnknownVolume(blockdevice_id)
-        pagesProxy = PagesProxy()
-        pagesProxy.deleteVirtualDisk(str(blockdevice_id))
+	tgtHost = hedvigLookupTgt('wood', self.logger_)
+        lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
+        if lunnum != -1:
+		hedvigDeleteLun(tgtHost, volName, lunnum, self.logger_)
+	hedvigDeleteVirtualDisk(volName, self.logger_)
+
         # Remove when delete issue is fixed
         time.sleep(1)
 
@@ -215,8 +218,8 @@ class HedvigBlockDeviceAPI(object):
             ``host``.
         """
         volName = str(blockdevice_id)
-        vdiskInfo = findVDisk(volName)
-        if (vdiskInfo == None):
+        vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
+        if (vDiskInfo == None):
             raise UnknownVolume(blockdevice_id)
 
         computeHost = socket.getfqdn(attach_to)
@@ -239,7 +242,7 @@ class HedvigBlockDeviceAPI(object):
                 return None
         return BlockDeviceVolume(
 			    blockdevice_id=unicode(blockdevice_id),
-			    size=vdiskInfo.size,
+			    size=vDiskInfo.size,
 			    attached_to=attach_to,
 			    dataset_id=UUID(blockdevice_id))
 
@@ -257,9 +260,9 @@ class HedvigBlockDeviceAPI(object):
         :returns: ``None``
         """
         volName = str(blockdevice_id)
-        vdiskInfo = findVDisk(volName)
-        if (vdiskInfo == None):
-		    raise UnknownVolume(blockdevice_id)
+        vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
+	if (vDiskInfo == None):
+		raise UnknownVolume(blockdevice_id)
 
         computeHost = self.compute_instance_id()
         try:
@@ -286,7 +289,8 @@ class HedvigBlockDeviceAPI(object):
         """
         """
         volName = str(blockdevice_id)
-        if (findVDisk(volName) == None):
+        vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
+        if (vDiskInfo == None):
             raise UnknownVolume(blockdevice_id)
         tgtHost = hedvigLookupTgt('wood', self.logger_)
         lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
@@ -314,13 +318,15 @@ class HedvigBlockDeviceAPI(object):
 
         :returns: A ``list`` of ``BlockDeviceVolume``s.
         """
-        pagesProxy = PagesProxy()
-        vdiskInfos = pagesProxy.listVDisks()
+        #pagesProxy = PagesProxy()
+        #vdiskInfos = pagesProxy.listVDisks()
+        #vdiskInfos = hedvigListVDisks()
         tgtHost = hedvigLookupTgt('wood', self.logger_)
         volumes = []
         for vdiskInfo in vdiskInfos:
             try:
-                vDiskInfo = pagesProxy.describeVDisk(vdiskInfo.vDiskName)
+		# Check this	
+                vDiskInfo = hedvigDescribeVDisk(vdiskInfo.vDiskName)
             except Exception as e:
                 continue
             try:
@@ -347,7 +353,8 @@ class HedvigBlockDeviceAPI(object):
 
 
     def temp(self):
-        hedvigLookupTgt('wood', self.logger_)
+	host = hedvigLookupTgt('wood', self.logger_)
+        self.logger_.info("hedvigLookupTgt: %s" , host)
 
     def get_device_path(self, blockdevice_id):
         """
@@ -363,7 +370,8 @@ class HedvigBlockDeviceAPI(object):
         :returns: A ``FilePath`` for the device.
         """
         volName = str(blockdevice_id)
-        if (findVDisk(volName) == None):
+        vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
+        if (vDiskInfo == None):
 	    	raise UnknownVolume(blockdevice_id)
         tgtHost = hedvigLookupTgt('wood', self.logger_)
         lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
@@ -389,8 +397,9 @@ class HedvigBlockDeviceAPI(object):
 def testHedvig():
     hdev = HedvigBlockDeviceAPI('','')
     #hdev.temp()
-    #tgtHost = hedvigLookupTgt('wood')
     hdev.create_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'), 1000000000)
-    #hdev.attach_volume(9, 'seamusclnt1.hedviginc.com')
+    hdev.attach_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'), 'esxi6g-docker-vm1.hedviginc.com')
+    hdev.detach_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'))
+    hdev.destroy_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'))
 
-#testHedvig()
+testHedvig()
