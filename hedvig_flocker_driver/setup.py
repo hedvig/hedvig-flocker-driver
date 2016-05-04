@@ -9,13 +9,10 @@ setup(
     license='Apache 2.0',
 
     classifiers=[
-
-    'Development Status :: 4 - Beta',
     # Python versions supported 
     'Programming Language :: Python :: 2.7',
     ],
 
     keywords='backend, plugin, flocker, docker, python',
     packages=find_packages(exclude=['']),
-    install_requires = ['hedvig-py'],
 )

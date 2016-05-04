@@ -12,11 +12,7 @@ from urlparse import urlparse
 import common.hedvigpyc
 from common.HedvigCommon import *
 from common.HedvigLogger import HedvigLogger
-HedvigLogger.setDefaultLogFile("flocker-driver.log")
 from common.HedvigConfig import HedvigConfig
-#from hedvig.common.HedvigConfig import HedvigConfig
-#from hedvig.common.HedvigControllerProxy import HedvigControllerProxy
-#from hedvig.common.HedvigUtility import *
 from subprocess import call
 import subprocess
 import os
@@ -53,16 +49,22 @@ class HedvigBlockDeviceAPI(object):
     defaultVolumeBlkSize_ = 4096
     defaultCreatedBy_ = "Hedvig_Flocker_driver"
     defaultExportedBlkSize_ = 4096
+    hedvigConfigFilePath_ = "/var/log/hedvig/config.xml"
 
     def __init__(self, username, password):
         """
         :returns: A ``BlockDeviceVolume``.
         """
+        HedvigConfig.getInstance().initConfig(HedvigBlockDeviceAPI.hedvigConfigFilePath_)
         self.logger_ = HedvigLogger.getLogger("HedvigBlockDeviceAPI")
+        handler = HedvigLogger.getHandler(logFileName = "flocker-driver.log")
+        self.logger_.addHandler(handler)
+
         self._username = username
         self._password = password
         self._instance_id = self.compute_instance_id()
-        HedvigOpCb.hedvigpycInit(HedvigConfig.getInstance().getPagesHost(), 8)
+        HedvigOpCb.hedvigpycInit("", 8)
+        self._tgtHost = hedvigLookupTgt(hedvigGetClusterName(), self.logger_)
 
     def allocation_unit(self):
         """
@@ -77,6 +79,7 @@ class HedvigBlockDeviceAPI(object):
         volumes = self.list_volumes()
         for volume in volumes:
             self.destroy_volume(volume.blockdevice_id)
+        hc.hedvigpycShutdown();
 
     def compute_instance_id(self):
         """
@@ -95,7 +98,7 @@ class HedvigBlockDeviceAPI(object):
         """
 
         name = str(dataset_id)
-        description = str(dataset_id) + '_' + profile_name
+        description = str(dataset_id) + '_' + str(profile_name)
         volumeType = ''
         vDiskInfo = hc.VDiskInfo()
         vDiskInfo.vDiskName = name
@@ -190,13 +193,12 @@ class HedvigBlockDeviceAPI(object):
         """
         volName = str(blockdevice_id)
         vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
-        if (vDiskInfo == None):
+        if (volName != vDiskInfo.vDiskName):    
 	    	raise UnknownVolume(blockdevice_id)
-	tgtHost = hedvigLookupTgt('wood', self.logger_)
-        lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
+        lunnum = hedvigGetLun(self._tgtHost, volName, self.logger_)
         if lunnum != -1:
-		hedvigDeleteLun(tgtHost, volName, lunnum, self.logger_)
-	hedvigDeleteVirtualDisk(volName, self.logger_)
+            hedvigDeleteLun(self._tgtHost, volName, lunnum, self.logger_)
+        hedvigDeleteVirtualDisk(volName, self.logger_)
 
         # Remove when delete issue is fixed
         time.sleep(1)
@@ -217,26 +219,26 @@ class HedvigBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume`` with a ``host`` attribute set to
             ``host``.
         """
+        self.logger_.debug("Attching blockdevice_id:%s", blockdevice_id)
         volName = str(blockdevice_id)
         vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
-        if (vDiskInfo == None):
+        if (volName != vDiskInfo.vDiskName):    
             raise UnknownVolume(blockdevice_id)
 
         computeHost = socket.getfqdn(attach_to)
         try:
-            tgtHost = hedvigLookupTgt('wood', self.logger_)
-            lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
+            lunnum = hedvigGetLun(self._tgtHost, volName, self.logger_)
         except:
             raise Exception("Failed to get Lun number")
         if lunnum == -1:
-                self.logger_.error("failed to add vDiskName:%s:tgtHost:%s", volName, tgtHost)
+                self.logger_.error("failed to add vDiskName:%s:tgtHost:%s", volName, self._tgtHost)
                 raise Exception("Failed to add Lun")
-        if ( self._is_attached(tgtHost, lunnum) != None):
+        if ( self._is_attached(lunnum) != None):
 		        raise AlreadyAttachedVolume(blockdevice_id)
         try:
-                hedvigAddAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn(computeHost)), self.logger_)
-                hedvigAddAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn()), self.logger_)
-                targetName, portal = hedvigDoIscsiDiscovery(tgtHost, lunnum, self.logger_)
+                hedvigAddAccess(self._tgtHost, lunnum, socket.gethostbyname(socket.getfqdn(computeHost)), self.logger_)
+                hedvigAddAccess(self._tgtHost, lunnum, socket.gethostbyname(socket.getfqdn()), self.logger_)
+                targetName, portal = hedvigDoIscsiDiscovery(self._tgtHost, lunnum, self.logger_)
         except Exception as e:
             	self.logger_.exception("volume assignment to connector failed :volume:%s:connector:%s", volName, attach_to)
                 return None
@@ -261,25 +263,24 @@ class HedvigBlockDeviceAPI(object):
         """
         volName = str(blockdevice_id)
         vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
-	if (vDiskInfo == None):
-		raise UnknownVolume(blockdevice_id)
+        if (volName != vDiskInfo.vDiskName):    
+            raise UnknownVolume(blockdevice_id)
 
         computeHost = self.compute_instance_id()
         try:
-            tgtHost = hedvigLookupTgt('wood', self.logger_)
-            lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
+            lunnum = hedvigGetLun(self._tgtHost, volName, self.logger_)
         except:
             raise UnattachedVolume(blockdevice_id)
         if lunnum == -1:
             raise UnattachedVolume(blockdevice_id)
-        if ( self._is_attached(tgtHost, lunnum) == None):
+        if ( self._is_attached(lunnum) == None):
             raise UnattachedVolume(blockdevice_id)
         devicepath = self.get_device_path(blockdevice_id)
         try:
             self.logout(blockdevice_id)
-            hedvigRemoveAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn(computeHost)), devicepath.path,
+            hedvigRemoveAccess(self._tgtHost, lunnum, socket.gethostbyname(socket.getfqdn(computeHost)), devicepath.path,
                     self.logger_)
-            hedvigRemoveAccess(tgtHost, lunnum, socket.gethostbyname(socket.getfqdn()), devicepath.path,
+            hedvigRemoveAccess(self._tgtHost, lunnum, socket.gethostbyname(socket.getfqdn()), devicepath.path,
                     self.logger_)
         except Exception as e:
             print e
@@ -290,22 +291,21 @@ class HedvigBlockDeviceAPI(object):
         """
         volName = str(blockdevice_id)
         vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
-        if (vDiskInfo == None):
+        if (volName != vDiskInfo.vDiskName):    
             raise UnknownVolume(blockdevice_id)
-        tgtHost = hedvigLookupTgt('wood', self.logger_)
-        lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
+        lunnum = hedvigGetLun(self._tgtHost, volName, self.logger_)
         try:
-            targetName, portal = hedvigDoIscsiDiscovery(tgtHost, lunnum, self.logger_)
+            targetName, portal = hedvigDoIscsiDiscovery(self._tgtHost, lunnum, self.logger_)
         except Exception as e:
             targetName = None
         if (targetName == None):
             raise UnattachedVolume(blockdevice_id)
         hedvigDoIscsiLogout(targetName, portal, self.logger_)
 
-    def _is_attached(self, tgtHost, lunnum):
+    def _is_attached(self, lunnum):
         attached_to = None
         try:
-		    targetName, portal = hedvigDoIscsiDiscovery(tgtHost, lunnum, self.logger_)
+		    targetName, portal = hedvigDoIscsiDiscovery(self._tgtHost, lunnum, self.logger_)
         except:
 		    portal = None
         if (portal is not None):
@@ -318,43 +318,37 @@ class HedvigBlockDeviceAPI(object):
 
         :returns: A ``list`` of ``BlockDeviceVolume``s.
         """
-        #pagesProxy = PagesProxy()
-        #vdiskInfos = pagesProxy.listVDisks()
-        #vdiskInfos = hedvigListVDisks()
-        tgtHost = hedvigLookupTgt('wood', self.logger_)
+        vDisks = hedvigListVDisks(self.logger_)
         volumes = []
-        for vdiskInfo in vdiskInfos:
+        len1 = len(vDisks)
+        for vDiskName in vDisks:
             try:
-		# Check this	
-                vDiskInfo = hedvigDescribeVDisk(vdiskInfo.vDiskName)
+                vDiskInfo = hedvigDescribeVDisk(vDiskName, self.logger_)
             except Exception as e:
                 continue
-            try:
-                lunnum = hedvigGetLun(tgtHost, vdiskInfo.vDiskName, self.logger_)
-                attached_to = self._is_attached(tgtHost, lunnum)
-            except Exception as e:
-                attached_to=None
-            volumes.append(BlockDeviceVolume(
-                blockdevice_id=unicode(vdiskInfo.vDiskName),
-                size=vdiskInfo.size,
-                attached_to=attached_to,
-                dataset_id=UUID(vdiskInfo.vDiskName)))
+            if (vDiskName == vDiskInfo.vDiskName):    
+                try:
+                    lunnum = hedvigGetLun(self._tgtHost, vDiskInfo.vDiskName, self.logger_)
+                    attached_to = self._is_attached(lunnum)
+                except Exception as e:
+                    attached_to=None
+                volumes.append(BlockDeviceVolume(
+                    blockdevice_id=unicode(vDiskInfo.vDiskName),
+                    size=vDiskInfo.size,
+                    attached_to=attached_to,
+                    dataset_id=UUID(vDiskInfo.vDiskName)))
         return volumes
 
-    def _find_path(self, tgtHost, lunnum):
+    def _find_path(self, lunnum):
         p = subprocess.Popen(["ls", "/dev/disk/by-path/"], stdout=subprocess.PIPE)
         (retOut, retErr) = p.communicate()
         for line in retOut.strip(" ").split("\n"):
-            if (tgtHost in line):
+            if (self._tgtHost in line):
                 lun = line[line.rfind("-")+1:]
                 if (int(lun) == lunnum):
                     link = os.readlink("/dev/disk/by-path/" + line)
                     return "/dev/" + link[link.rfind("/")+1:]
 
-
-    def temp(self):
-	host = hedvigLookupTgt('wood', self.logger_)
-        self.logger_.info("hedvigLookupTgt: %s" , host)
 
     def get_device_path(self, blockdevice_id):
         """
@@ -371,24 +365,23 @@ class HedvigBlockDeviceAPI(object):
         """
         volName = str(blockdevice_id)
         vDiskInfo = hedvigDescribeVDisk(volName, self.logger_)
-        if (vDiskInfo == None):
+        if (volName != vDiskInfo.vDiskName):    
 	    	raise UnknownVolume(blockdevice_id)
-        tgtHost = hedvigLookupTgt('wood', self.logger_)
-        lunnum = hedvigGetLun(tgtHost, volName, self.logger_)
+        lunnum = hedvigGetLun(self._tgtHost, volName, self.logger_)
         try:
-            targetName, portal = hedvigDoIscsiDiscovery(tgtHost, lunnum, self.logger_)
+            targetName, portal = hedvigDoIscsiDiscovery(self._tgtHost, lunnum, self.logger_)
         except Exception as e:
             targetName = None
         if (targetName == None):
             raise UnattachedVolume(blockdevice_id)
-        path = self._find_path(tgtHost, lunnum)
+        path = self._find_path(lunnum)
         if (path != None):
             return FilePath(path)
         hedvigDoIscsiLogout(targetName, portal, self.logger_)
         hedvigDoIscsiLogin(targetName, portal, self.logger_)
         # May need to retry
         for i in range (1, 10):
-            path = self._find_path(tgtHost, lunnum)
+            path = self._find_path(lunnum)
             if (path != None):
                 return FilePath(path)
             i += 1
@@ -396,10 +389,11 @@ class HedvigBlockDeviceAPI(object):
 
 def testHedvig():
     hdev = HedvigBlockDeviceAPI('','')
-    #hdev.temp()
+    hdev.create_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b1'), 1000000000)
     hdev.create_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'), 1000000000)
-    hdev.attach_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'), 'esxi6g-docker-vm1.hedviginc.com')
-    hdev.detach_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'))
-    hdev.destroy_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'))
+    hdev.list_volumes()
+    #hdev.detach_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b8'))
+    hdev.destroy_volume(UUID('7962b8ae-35cb-4b4e-aaa8-e04dc8aec2b1'))
+    hdev._cleanup()
 
-testHedvig()
+#testHedvig()
