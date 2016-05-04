@@ -1,4 +1,3 @@
-# Copyright 2015 EMC Corporation
 
 from flocker.node import BackendDescription, DeployerType
 from hedvig_flocker_driver.hedvigdriver import *
