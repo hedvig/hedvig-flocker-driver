@@ -114,7 +114,7 @@ class HedvigBlockDeviceAPI(object):
                 vDiskInfo.cached = 'true'
                 vDiskInfo.dedup = 'false'
                 vDiskInfo.compressed = 'false'
-                vDiskInfo.residence = 0
+                vDiskInfo.residence = 1
         elif (profile_name.lower() == VolumeProfiles.SILVER):
                 vDiskInfo.cached = 'true'
                 vDiskInfo.dedup = 'true'
